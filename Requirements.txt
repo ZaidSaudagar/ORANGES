@@ -1,0 +1,17 @@
+python-dotenv
+groq
+AppOpener
+pywhatkit
+bs4     # Use full PyPI name instead of just `bs4`
+pillow
+rich
+requests
+keyboard           
+cohere
+googlesearch-python
+selenium
+mtranslate
+pygame
+edge-tts
+PyQt5              
+webdriver-manager
