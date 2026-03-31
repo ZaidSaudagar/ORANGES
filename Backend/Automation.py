@@ -1,4 +1,4 @@
-from AppOpener import open, close as appopen
+from AppOpener import open, close
 import webbrowser
 from pywhatkit import search, playonyt
 from dotenv import dotenv_values
@@ -10,6 +10,9 @@ import requests
 import keyboard
 import asyncio
 import os
+from Config import DataDirectoryPath
+from Backend.Terminal import execute_command
+from Backend.ScreenCapture import describe_screen
 
 # Load environment variables from the .env file
 env_vars = dotenv_values(".env")
@@ -37,6 +40,8 @@ professional_responses = [
     "I'm at your service for any additional questions or support you may need—don't hesitate to ask."
 ]
 
+# Limit messages list to prevent memory growth
+MAX_MESSAGES = 20
 messages = []
 
 # ✅ Format system message using environment variable safely
@@ -47,108 +52,163 @@ SystemChatBot = [{
 
 def GoogleSearch(Topic):
     search(Topic)
-    return True
+    return "Opened Google Search"
 
 def Content(Topic):
     def OpenNotepad(file):
-        subprocess.Popen(['notepad.exe', file])
+        try:
+            subprocess.Popen(['notepad.exe', file])
+        except Exception as e:
+            print(f"[ERROR] Failed to open notepad with file '{file}': {e}")
 
     def ContentWriterAI(prompt):
+        # Limit messages list size to prevent memory growth
+        if len(messages) > MAX_MESSAGES:
+            messages[:] = messages[-MAX_MESSAGES:]
+        
         messages.append({"role": "user", "content": prompt})
 
-        completion = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
-            messages=SystemChatBot + messages,
-            max_tokens=2048,
-            temperature=0.7,
-            top_p=1,
-            stream=True,
-            stop=None
-        )
+        try:
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=SystemChatBot + messages,
+                max_tokens=2048,
+                temperature=0.7,
+                top_p=1,
+                stream=True,
+                stop=None
+            )
 
-        Answer = ""
-        for chunk in completion:
-            if chunk.choices[0].delta.content:
-                Answer += chunk.choices[0].delta.content
+            Answer = ""
+            for chunk in completion:
+                if chunk.choices[0].delta.content:
+                    Answer += chunk.choices[0].delta.content
 
-        Answer = Answer.replace("</s*>", "")
-        messages.append({"role": "assistant", "content": Answer})
-        return Answer
+            Answer = Answer.replace("</s>", "")
+            if Answer:
+                messages.append({"role": "assistant", "content": Answer})
+            return Answer
+        except Exception as e:
+            print(f"[ERROR] Error in ContentWriterAI: {e}")
+            raise
 
-    Topic = Topic.replace("Content ", "")
-    ContentByAI = ContentWriterAI(Topic)
+    try:
+        Topic = Topic.replace("Content ", "").strip()
+        if not Topic:
+            return "No content topic provided"
+            
+        ContentByAI = ContentWriterAI(Topic)
+        
+        if not ContentByAI:
+            return "Failed to generate content"
 
-    filepath = rf"Data\{Topic.lower().replace(' ', '')}.txt"
-    with open(filepath, "w", encoding="utf-8") as file:
-        file.write(ContentByAI)
+        # Sanitize filename
+        import re
+        safe_filename = re.sub(r'[<>:"/\\|?*]', '_', Topic.lower().replace(' ', ''))
+        if len(safe_filename) > 200:
+            safe_filename = safe_filename[:200]
+            
+        filepath = DataDirectoryPath(f"{safe_filename}.txt")
+        with open(filepath, "w", encoding="utf-8") as file:
+            file.write(ContentByAI)
 
-    OpenNotepad(filepath)
-    return True
+        OpenNotepad(filepath)
+        return f"Content generated: {safe_filename}"
+    except Exception as e:
+        print(f"[ERROR] Error in Content function: {e}")
+        import traceback
+        traceback.print_exc()
+        return "Error creating content"
 
 def YouTubeSearch(Topic):
     url = f"https://www.youtube.com/results?search_query={Topic}"
     webbrowser.open(url)
-    return True
+    return f"Opened YouTube search for {Topic}"
 
 def PlayYoutube(query):
     playonyt(query)
-    return True
+    return f"Playing {query} on YouTube"
 
 def OpenApp(app, sess=requests.session()):
     try:
-        appopen(app, match_closest=True, output=True, throw_error=True)
-        return True
-    except:
-        def extract_links(html):
-            if html is None:
-                return []
-            soup = BeautifulSoup(html, 'html.parser')
-            links = soup.find_all('a', {'jsname': 'UWckNb'})
-            return [link.get('href') for link in links if link.get('href')]
+        open(app, match_closest=True, output=True, throw_error=True)
+        return f"Opened {app}"
+    except Exception as e:
+        print(f"[DEBUG] AppOpener failed for '{app}', trying web search fallback: {e}")
+        try:
+            def extract_links(html):
+                if html is None:
+                    return []
+                soup = BeautifulSoup(html, 'html.parser')
+                links = soup.find_all('a', {'jsname': 'UWckNb'})
+                return [link.get('href') for link in links if link.get('href')]
 
-        def search_google(query):
-            url = f"https://www.google.com/search?q={query}"
-            headers = {"User-Agent": user_agent}
-            response = sess.get(url, headers=headers)
-            if response.status_code == 200:
-                return response.text
+            def search_google(query):
+                url = f"https://www.google.com/search?q={query}"
+                headers = {"User-Agent": user_agent}
+                response = sess.get(url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    return response.text
+                else:
+                    return None
+
+            html = search_google(app)
+            links = extract_links(html)
+            if links:
+                webbrowser.open(links[0])
+                return f"Opened {app} via Web"
             else:
-                print("Apologies Sir, I've Failed to retrieve search results.")
-                return None
-
-        html = search_google(app)
-        links = extract_links(html)
-        if links:
-            webbrowser.open(links[0])
-        return True
+                return f"Could not find {app}"
+        except Exception as e2:
+            return f"Failed to open {app}"
 
 def CloseApp(app):
-    if "chrome" in app:
-        return True  # Skip Chrome
+    if "chrome" in app.lower():
+        return "Cannot close Chrome (Protected)"
     try:
-        appopen(app, match_closest=True, output=True, throw_error=True)
-        return True
-    except:
-        return False
+        close(app, match_closest=True, output=True, throw_error=True)
+        return f"Closed {app}"
+    except Exception as e:
+        return f"Failed to close {app}"
 
 def System(command):
     def mute(): keyboard.press_and_release("volume mute")
     def unmute(): keyboard.press_and_release("volume unmute")
     def volume_up(): keyboard.press_and_release("volume up")
     def volume_down(): keyboard.press_and_release("volume down")
-
-    commands_map = {
-        "mute": mute,
-        "unmute": unmute,
-        "volume up": volume_up,
-        "volume down": volume_down
-    }
-
-    func = commands_map.get(command)
-    if func:
-        func()
-        return True
-    return False
+    
+    command = command.lower().strip()
+    
+    if "mute" in command and "unmute" not in command:
+        mute()
+        return "System Muted"
+    elif "unmute" in command:
+        unmute()
+        return "System Unmuted"
+    elif "maximize" in command or "100%" in command:
+        # Press volume up 50 times to maximize
+        for _ in range(50):
+            keyboard.press_and_release("volume up")
+        return "System Volume Maximized"
+    elif "volume up" in command or "increase" in command:
+        for _ in range(5):
+            volume_up()
+        return "Volume Increased"
+    elif "volume down" in command or "decrease" in command:
+        for _ in range(5):
+            volume_down()
+        return "Volume Decreased"
+    elif "shut down" in command or "shutdown" in command:
+        os.system("shutdown /s /t 5")
+        return "Shutting down system"
+    elif "restart" in command:
+        os.system("shutdown /r /t 5")
+        return "Restarting system"
+    elif "sleep" in command or "suspend" in command:
+        os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+        return "Putting system to sleep"
+        
+    return f"Unknown system command: {command}"
 
 async def TranslateAndExecute(commands: list[str]):
     funcs = []
@@ -168,6 +228,11 @@ async def TranslateAndExecute(commands: list[str]):
             funcs.append(asyncio.to_thread(YouTubeSearch, command.removeprefix("Youtube ")))
         elif command.startswith("system "):
             funcs.append(asyncio.to_thread(System, command.removeprefix("system ")))
+        elif command.startswith("run "):
+            funcs.append(asyncio.to_thread(execute_command, command.removeprefix("run ")))
+        elif command.startswith("screenshot"):
+            query = command.removeprefix("screenshot").strip() or "Describe what you see on this screen."
+            funcs.append(asyncio.to_thread(describe_screen, query))
         else:
             print(f"[red]No Function Found for: {command}[/red]")
 
@@ -176,6 +241,7 @@ async def TranslateAndExecute(commands: list[str]):
         yield result
 
 async def Automation(commands: list[str]):
+    results = []
     async for result in TranslateAndExecute(commands):
-        pass
-    return True
+        results.append(str(result))
+    return results
